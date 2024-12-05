@@ -13,20 +13,16 @@
 
 (check= (o-finp 4) t)
 (check= (o-finp (make-ord 1 1 0)) nil)
+(check= (o-finp (omega)) nil)
 
-(definecd ord+ (o0 o1 :nat-ord) :nat-ord
-  (cond
-   ((natp o0) (if (natp o1) (+ o0 o1) o1))
-   ((natp o1) o0)
-   (t o0))) ;; different levels of infinity DO NOT MATTER for our proof.
-
-(definecd incr-ttl (dgs :dgs del :nat-ord) :dgs
-  (match dgs
+(definecd incr-ttl (tdgs :tdgs del :nat-ord) :tdgs
+  (match tdgs
     (() ())
-    ((dg . rst) (cons (mset :ttl (ord+ (dg-ttl dg) del) dg) (incr-ttl rst del)))))
+    ((tdg . rst) (cons (mset :del (o+ (tdg-del tdg) del) tdg)
+		       (incr-ttl rst del)))))
 
-(property incr-ttl-len (dgs :dgs del :nat-ord)
-  (= (len (incr-ttl dgs del)) (len dgs))
+(property incr-ttl-len (tdgs :tdgs del :nat-ord)
+  (= (len (incr-ttl tdgs del)) (len tdgs))
   :hints (("Goal" :in-theory (enable incr-ttl-definition-rule))))
 
 ;; Given a pair of tbfs, we can come up with a new (third) tbf which in
@@ -35,289 +31,546 @@
   (tbf
    ;; bucket capacity (b-cap)
    (tbf-b-cap (cadr ttbf))
-   ;; link capacity (l-cap)
-   (+ (tbf-l-cap (car ttbf)) (tbf-l-cap (cadr ttbf)))
+   ;; link capacity (d-cap)
+   (+ (tbf-d-cap (car ttbf)) (tbf-d-cap (cadr ttbf)))
    ;; bucket (b)
-   (tbf-b (cadr ttbf))
+   (tbf-bkt (cadr ttbf))
    ;; rate (r)
-   (tbf-r (cadr ttbf))
+   (tbf-rat (cadr ttbf))
    ;; time-to-live (ttl)
-   (ord+ (tbf-ttl (car ttbf)) (tbf-ttl (cadr ttbf)))
+   (o+ (tbf-del (car ttbf)) (tbf-del (cadr ttbf)))
    ;; queue of data (D) -- timed 
-   (append (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf)))
-	   (tbf-D (cadr ttbf)))))
+   (append (incr-ttl (tbf-data (car ttbf)) (tbf-del (cadr ttbf)))
+	   (tbf-data (cadr ttbf)))))
 
 ;; We say two TBFs are equivalent if they match everywhere except their
 ;; buckets and expiries.
-
+;; Note, we will revisit this notion a little later in a more nuanced way.
 (definecd ~= (t1 t2 :tbf) :bool
-  (^ (== (tbf-b-cap t1) (tbf-b-cap t2))
-     (== (tbf-l-cap t1) (tbf-l-cap t2))
-     (== (tbf-r t1) (tbf-r t2))
-     (== (tbf-ttl t1) (tbf-ttl t2))
-     (== (dgs->poss (tbf-D t1))
-	 (dgs->poss (tbf-D t2)))))
+  (^ (= (tbf-b-cap t1) (tbf-b-cap t2))
+     (= (tbf-d-cap t1) (tbf-d-cap t2))
+     (= (tbf-rat t1) (tbf-rat t2))
+     (== (tbf-del t1) (tbf-del t2))
+     (== (tdgs->poss (tbf-data t1))
+	 (tdgs->poss (tbf-data t2)))))
 
-(property dgs->poss-ignore-incr (dgs :dgs del :nat-ord)
-  (equal (dgs->poss (incr-ttl dgs del))
-	 (dgs->poss dgs))
-  :hints (("Goal" :in-theory (enable dgs->poss-definition-rule
-				     incr-ttl-definition-rule))))
+(property tdgs->poss-ignore-incr (tdgs :tdgs del :nat-ord)
+  (== (tdgs->poss (incr-ttl tdgs del))
+      (tdgs->poss tdgs))
+  :hints (("Goal" :in-theory (enable tdgs->poss-definition-rule
+				     incr-ttl-definition-rule
+				     |MAP*-*(LAMBDA (D) (TDG-ID D))|))))
 
-(property dgs->poss-app (dgs0 dgs1 :dgs)
-  (equal (dgs->poss (append dgs0 dgs1))
-	 (append (dgs->poss dgs0) (dgs->poss dgs1)))
-  :hints (("Goal" :in-theory (enable dgs->poss-definition-rule))))
+(property tdgs->poss-app (tdgs0 tdgs1 :tdgs)
+  (== (tdgs->poss (append tdgs0 tdgs1))
+      (append (tdgs->poss tdgs0) (tdgs->poss tdgs1)))
+  :hints (("Goal" :in-theory (enable tdgs->poss-definition-rule
+				     |MAP*-*(LAMBDA (D) (TDG-ID D))|))))
 
-(property tricky-dgs-append-step (ttbf :two-tbf p :pos drop :bool)
-  (equal (dgs->poss (append (cons (dg p (tbf-ttl (car ttbf))) (tbf-D (car ttbf))) 
-			    (tbf-D (cadr ttbf))))
-	 (dgs->poss (append (cons (dg p (ord+ (tbf-ttl (car ttbf)) (tbf-ttl (cadr ttbf))))
-				  (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf))))
-			    (tbf-D (cadr ttbf)))))
-  :hints (("Goal" :in-theory (enable dgs->poss-definition-rule))))
+(property tdgs->poss-o+-car-ttl (p :pos del0 del1 :nat-ord pld :string tdgs :tdgs)
+  (== (tdgs->poss (cons (tdg p (o+ del0 del1) pld) tdgs))
+      (tdgs->poss (cons (tdg p del0 pld) tdgs)))
+  :hints (("Goal" :in-theory (enable tdgs->poss-definition-rule
+				     |MAP*-*(LAMBDA (D) (TDG-ID D))|))))
 
-(property tricky-dgs-re-arrange-step (ttbf :two-tbf p :pos drop :bool)
-  (equal (dgs->poss (append (cons (dg p (ord+ (tbf-ttl (car ttbf)) (tbf-ttl (cadr ttbf))))
-                         (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf))))
-			    (tbf-D (cadr ttbf))))
-	 (dgs->poss (cons (dg p (ord+ (tbf-ttl (car ttbf)) (tbf-ttl (cadr ttbf))))
-			  (append (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf))) (tbf-D (cadr ttbf))))))
-  :hints (("Goal" :in-theory (enable dgs->poss-definition-rule))))
+(propertyd tdgs->poss-cons (tdg :tdg tdgs :tdgs)
+	   (== (tdgs->poss (cons tdg tdgs))
+	       (cons (tdg-id tdg) (tdgs->poss tdgs)))
+	   :hints (("Goal" :in-theory (enable tdgs->poss-definition-rule
+					      |MAP*-*(LAMBDA (D) (TDG-ID D))|))))
 
-(property len-[+]-D=len-+-Ds (ttbf :two-tbf)
-  (equal (len (tbf-D ([+] ttbf))) (+ (len (tbf-D (car ttbf))) (len (tbf-D (cadr ttbf)))))
-  :hints (("Goal" :in-theory (enable [+]-definition-rule))))
+(property tricky-tdgs-append-step (ttbf :two-tbf p :pos pld :string)
+  (== (tdgs->poss (append (cons (tdg p (o+ (tbf-del (car ttbf)) (tbf-del (cadr ttbf))) pld)
+				(incr-ttl (tbf-data (car ttbf)) (tbf-del (cadr ttbf))))
+			  (tbf-data (cadr ttbf))))
+      (tdgs->poss (append (cons (tdg p (tbf-del (car ttbf)) pld) (tbf-data (car ttbf))) 
+			  (tbf-data (cadr ttbf)))))
+  :hints (("Goal" :use ((:instance tdgs->poss-app
+				   (tdgs0 (cons (tdg p
+						     (o+ (tbf-del (car ttbf))
+							 (tbf-del (cadr ttbf)))
+						     pld)
+						(incr-ttl (tbf-data (car ttbf))
+							  (tbf-del (cadr ttbf)))))
+				   (tdgs1 (tbf-data (cadr ttbf))))
+			(:instance tdgs->poss-app
+				   (tdgs0 (cons (tdg p (tbf-del (car ttbf)) pld)
+						(tbf-data (car ttbf))))
+				   (tdgs1 (tbf-data (cadr ttbf))))
+			(:instance tdgs->poss-cons
+				   (tdg (tdg p
+					    (o+ (tbf-del (car ttbf))
+						(tbf-del (cadr ttbf)))
+					    pld))
+				   (tdgs (incr-ttl (tbf-data (car ttbf))
+						   (tbf-del (cadr ttbf)))))
+			(:instance tdgs->poss-cons
+				   (tdg (tdg p (tbf-del (car ttbf)) pld))
+				   (tdgs (tbf-data (car ttbf))))))))
+
+(property tricky-dgs-re-arrange-step (ttbf :two-tbf p :pos pld :string)
+  (== (tdgs->poss (append (cons (tdg p (o+ (tbf-del (car ttbf)) (tbf-del (cadr ttbf))) pld)
+				(incr-ttl (tbf-data (car ttbf)) (tbf-del (cadr ttbf))))
+			  (tbf-data (cadr ttbf))))
+      (tdgs->poss (cons (tdg p (o+ (tbf-del (car ttbf)) (tbf-del (cadr ttbf))) pld)
+			(append (incr-ttl (tbf-data (car ttbf)) (tbf-del (cadr ttbf)))
+				(tbf-data (cadr ttbf))))))
+  :hints (("Goal" :in-theory (enable tdgs->poss-definition-rule))))
+
+(property sz-app (tdgs0 tdgs1 :tdgs) (= (+ (sz tdgs0) (sz tdgs1)) (sz (append tdgs0 tdgs1)))
+  :hints (("Goal" :in-theory (enable sz-definition-rule))))
+
+(property sz-incr-ttl (tdgs :tdgs o :nat-ord) (= (sz (incr-ttl tdgs o)) (sz tdgs))
+  :hints (("Goal" :in-theory (enable sz-definition-rule incr-ttl-definition-rule))))
+
+(property sz-[+]-D=len-+-Ds (ttbf :two-tbf)
+  (= (sz (tbf-data ([+] ttbf))) (+ (sz (tbf-data (car ttbf))) (sz (tbf-data (cadr ttbf)))))
+  :hints (("Goal" :in-theory (enable [+]-definition-rule
+				     incr-ttl-definition-rule
+				     sz-definition-rule)
+	   :use ((:instance sz-incr-ttl (tdgs (tbf-data (car ttbf)))
+			    (o (tbf-del (cadr ttbf))))
+		 (:instance sz-app
+			   (tdgs0 (incr-ttl (tbf-data (car ttbf))
+					    (tbf-del (cadr ttbf))))
+			   (tdgs1 (tbf-data (cadr ttbf))))))))
 
 (property if-car-tbf-not-full-then-ttbf-not-full (ttbf :two-tbf)
-  :h (^ (< (len (tbf-D (car ttbf))) (tbf-l-cap (car ttbf)))
-	(<= (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf))))
-  (< (len (tbf-D ([+] ttbf))) (tbf-l-cap ([+] ttbf)))
+  :h (^ (< (sz (tbf-data (car ttbf))) (tbf-d-cap (car ttbf)))
+	(<= (sz (tbf-data (cadr ttbf))) (tbf-d-cap (cadr ttbf))))
+  (< (sz (tbf-data ([+] ttbf))) (tbf-d-cap ([+] ttbf)))
+  :instructions ((:use (:instance sz-[+]-d=len-+-ds))
+                 (:use (:instance [+]-definition-rule))
+                 :pro
+                 (:claim (= (sz (tbf-data ([+] ttbf)))
+                            (+ (sz (tbf-data (car ttbf)))
+                               (sz (tbf-data (cadr ttbf))))))
+                 (:drop 2)
+                 (:claim (= (tbf-d-cap ([+] ttbf))
+                            (+ (tbf-d-cap (car ttbf))
+                               (tbf-d-cap (cadr ttbf)))))
+                 (:drop 1)
+                 :prove))
+
+(property ~=-D[+]-trn-lem1
+  (ttbf :two-tbf p :pos pld :string)
+  :h (^ (< (sz (tbf-data (car ttbf))) (tbf-d-cap (car ttbf)))
+	(<= (sz (tbf-data (cadr ttbf))) (tbf-d-cap (cadr ttbf))))
+  (== (tdgs->poss (tbf-data ([+] (list (tbf-prc (car ttbf) p pld) (cadr ttbf)))))
+      (tdgs->poss (append (tbf-data (tbf-prc (car ttbf) p pld)) (tbf-data (cadr ttbf)))))
   :hints (("Goal" :in-theory (enable [+]-definition-rule))))
 
-#|
-PROOF SKETCH:
+(property ~=-D[+]-trn-lem2-nodrop
+  (ttbf :two-tbf p :pos pld :string)
+  :h (^ (<= (+ (sz (tbf-data (car ttbf))) (length pld)) (tbf-d-cap (car ttbf)))
+	(<= (sz (tbf-data (cadr ttbf))) (tbf-d-cap (cadr ttbf))))
+  (== (tdgs->poss (append (tbf-data (tbf-prc (car ttbf) p pld)) (tbf-data (cadr ttbf))))
+      (tdgs->poss (append (cons (tdg p (tbf-del (car ttbf)) pld) (tbf-data (car ttbf))) 
+			  (tbf-data (cadr ttbf)))))
+  :hints (("Goal" :in-theory (enable tbf-prc-definition-rule))))
 
-Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
-            (len (tbf-D (cadr ttbf))) <= (tbf-l-cap (cadr ttbf)).  Then ...
-
-(dgs->poss (tbf-D ([+] (list (tbf-trn (car ttbf) p drop) (cadr ttbf)))))
-
-= { by [+]-definition-rule }
-
-(dgs->poss (append (incr-ttl (tbf-D (tbf-trn (car ttbf) p drop)) (tbf-ttl (cadr ttbf)))
-                   (tbf-D (cadr ttbf))))
-
-= { by dgs->poss-app }
-
-(append (dgs->poss (incr-ttl (tbf-D (tbf-trn (car ttbf) p drop)) (tbf-ttl (cadr ttbf))))
-        (dgs->poss (tbf-D (cadr ttbf))))
-
-= { by dgs->poss-ignore-incr }
-
-(append (dgs->poss (tbf-D (tbf-trn (car ttbf) p drop)))
-        (dgs->poss (tbf-D (cadr ttbf))))
-
-= { by dgs->poss-app }
-
-(dgs->poss (append (tbf-D (tbf-trn (car ttbf) p drop)) (tbf-D (cadr ttbf))))
-
-= { tbf-trn-definition-rule}
-
-(dgs->poss (append (cons (dg p (tbf-ttl (car ttbf))) (tbf-D (car ttbf))) 
-                   (tbf-D (cadr ttbf))))
-
-= { tricky-dgs-append-step }
-
-(dgs->poss (append (cons (dg p (ord+ (tbf-ttl (car ttbf)) (tbf-ttl (cadr ttbf))))
-                         (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf))))
-	           (tbf-D (cadr ttbf))))
-
-= { tricky-dgs-re-arrange-step }
-
-(dgs->poss (cons (dg p (ord+ (tbf-ttl (car ttbf)) (tbf-ttl (cadr ttbf))))
-                 (append (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf))) (tbf-D (cadr ttbf)))))
-
-= { tbf-trn-definition-rule }
-
-(dgs->poss (tbf-D (tbf-trn ([+] ttbf) p drop)))
-|#
-(property ~=-D[+]-trn (ttbf :two-tbf p :pos drop :bool)
-  :proof-timeout 18000
-  :h (^ (< (len (tbf-D (car ttbf))) (tbf-l-cap (car ttbf)))
-	(<= (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf))))
-  (== (dgs->poss (tbf-D ([+] (list (tbf-trn (car ttbf) p drop) (cadr ttbf)))))
-      (dgs->poss (tbf-D (tbf-trn ([+] ttbf) p drop))))
-  :hints (("Goal" :use ((:instance [+]-definition-rule
-				   (ttbf (list (tbf-trn (car ttbf) p drop) (cadr ttbf))))
-			(:instance dgs->poss-app
-				   (dgs0 (incr-ttl (tbf-D (tbf-trn (car ttbf) p drop)) (tbf-ttl (cadr ttbf))))
-				   (dgs1 (tbf-D (cadr ttbf))))
-			(:instance dgs->poss-ignore-incr
-				   (dgs (tbf-D (tbf-trn (car ttbf) p drop)))
-				   (del (tbf-ttl (cadr ttbf))))
-			(:instance dgs->poss-app
-				   (dgs0 (tbf-D (tbf-trn (car ttbf) p drop)))
-				   (dgs1 (tbf-D (cadr ttbf))))
-			(:instance tbf-trn-definition-rule
-				   (tbf (car ttbf))
-				   (x p))
-			(:instance tricky-dgs-append-step)
-			(:instance tricky-dgs-re-arrange-step)
-			(:instance tbf-trn-definition-rule
-				   (tbf ([+] ttbf))
-				   (x p))
-			(:instance [+]-definition-rule)))))
+(property ~=-D[+]-trn-lem3-nodrop
+  (ttbf :two-tbf p :pos pld :string)
+  :h (^ (<= (+ (sz (tbf-data (car ttbf))) (length pld)) (tbf-d-cap (car ttbf)))
+	(<= (sz (tbf-data (cadr ttbf))) (tbf-d-cap (cadr ttbf))))
+  (== (tdgs->poss (append (cons (tdg p (tbf-del (car ttbf)) pld) (tbf-data (car ttbf))) 
+			  (tbf-data (cadr ttbf))))
+      (tdgs->poss (tbf-data (tbf-prc ([+] ttbf) p pld))))
+  :instructions
+  ((:use (:instance tricky-tdgs-append-step))
+   (:use (:instance tricky-dgs-re-arrange-step))
+   (:use (:instance tbf-prc-definition-rule (tbf ([+] ttbf)) (x p)))
+   (:use (:instance [+]-definition-rule))
+   (:use (:instance sz-[+]-d=len-+-ds))
+   :pro
+   (:claim (<= (+ (+ (sz (tbf-data (car ttbf)))
+                     (sz (tbf-data (cadr ttbf))))
+                  (length pld))
+               (+ (tbf-d-cap (car ttbf))
+                  (tbf-d-cap (cadr ttbf)))))
+   (:in-theory (enable tbf-prc-definition-rule
+                       sz-definition-rule [+]-definition-rule))
+   :prove))
 
 ;; If (T1 |> T2) does a transmit, this is equivalent to (T1 [+] T2) doing
 ;; a transmit.
-(property (ttbf :two-tbf p :pos drop :bool)
-  :proof-timeout 9000
-  :h (^ (< (len (tbf-D (car ttbf))) (tbf-l-cap (car ttbf)))
-	(<= (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf))))
-  (~= ([+] (list (tbf-trn (car ttbf) p drop) (cadr ttbf)))
-      (tbf-trn ([+] ttbf) p drop))
-  :hints (("Goal" :in-theory (enable tbf-trn-definition-rule
-				     ~=-definition-rule
-				     [+]-definition-rule
-				     incr-ttl-definition-rule)
-	   :use (:instance ~=-D[+]-trn))))
+(encapsulate () (local (in-theory (enable sz-definition-rule)))
+	     (propertyd transmission-rule (ttbf :two-tbf p :pos pld :string) 
+			:h (^ (<= (+ (sz (tbf-data (car ttbf))) (length pld))
+				  (tbf-d-cap (car ttbf)))
+			      (<= (sz (tbf-data (cadr ttbf)))
+				  (tbf-d-cap (cadr ttbf))))
+			(~= ([+] (list (tbf-prc (car ttbf) p pld)
+				       (cadr ttbf)))
+			    (tbf-prc ([+] ttbf) p pld))
+			:instructions
+			((:use (:instance [+]-definition-rule))
+			 (:use (:instance [+]-definition-rule
+					  (ttbf (list (tbf-prc (car ttbf) p pld)
+						      (cadr ttbf)))))
+			 (:use (:instance tbf-prc-definition-rule (tbf (car ttbf))
+					  (x p)))
+			 (:use (:instance tbf-prc-definition-rule (tbf ([+] ttbf))
+					  (x p)))
+			 (:use (:instance ~=-definition-rule
+					  (t1 ([+] (list (tbf-prc (car ttbf) p pld)
+							 (cadr ttbf))))
+					  (t2 (tbf-prc ([+] ttbf) p pld))))
+			 (:in-theory (enable incr-ttl-definition-rule))
+			 (:use (:instance ~=-d[+]-trn-lem3-nodrop))
+			 :pro
+			 (:claim (= (tbf-b-cap ([+] (list (tbf-prc (car ttbf) p pld)
+							  (cadr ttbf))))
+				    (tbf-b-cap (tbf-prc ([+] ttbf) p pld))))
+			 
+			 (:claim (== (tbf-del ([+] (list (tbf-prc (car ttbf) p pld)
+							 (cadr ttbf))))
+				     (tbf-del (tbf-prc ([+] ttbf) p pld))))
+			 (:claim (== (tbf-data ([+] (list (tbf-prc (car ttbf) p pld)
+							  (cadr ttbf))))
+				     (app (incr-ttl (tbf-data (car (list (tbf-prc (car ttbf) p pld)
+									 (cadr ttbf))))
+						    (tbf-del (cadr (list (tbf-prc (car ttbf) p pld)
+									 (cadr ttbf)))))
+					  (tbf-data (cadr (list (tbf-prc (car ttbf) p pld)
+								(cadr ttbf)))))))
+			 (:use (:instance sz-[+]-d=len-+-ds))
+			 :pro
+			 (:claim (<= (+ (+ (sz (tbf-data (car ttbf))) (length pld))
+					(sz (tbf-data (cadr ttbf))))
+				     (+ (tbf-d-cap (car ttbf))
+					(tbf-d-cap (cadr ttbf)))))
+			 (:claim (<= (+ (sz (tbf-data ([+] ttbf))) (length pld))
+				     (tbf-d-cap ([+] ttbf))))
+			 :prove)))
+
+(in-theory (disable ~=-d[+]-trn-lem1
+		    ~=-d[+]-trn-lem2-nodrop
+		    ~=-d[+]-trn-lem3-nodrop))
+
+(propertyd nth-incr-ttl (tdgs :tdgs i :nat o :nat-ord)
+	   :h (< i (len tdgs))
+	   (^ (== (tdg-pld (nth i (incr-ttl tdgs o)))
+		  (tdg-pld (nth i tdgs)))
+	      (== (tdg-id (nth i (incr-ttl tdgs o)))
+		  (tdg-id (nth i tdgs))))
+	   :hints (("Goal" :in-theory (enable incr-ttl-definition-rule))))
 
 (property [+]-dlv-contracts (ttbf :two-tbf i :nat)
-  :proof-timeout 8000
-  :h (^ (< i (len (tbf-D (car ttbf))))
-	(posp (tbf-b (car ttbf)))
-	(posp (tbf-b (cadr ttbf))))
-  (^ (== (len (tbf-D ([+] ttbf)))
-	 (+ (len (tbf-D (car ttbf)))
-	    (len (tbf-D (cadr ttbf)))))
-     (< i (len (tbf-D ([+] ttbf))))
-     (two-tbfp (list (tbf-dlv (car ttbf) i)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (tbf-bkt (car ttbf)) (tbf-bkt (cadr ttbf))))
+  (^ (= (len (tbf-data ([+] ttbf)))
+	(+ (len (tbf-data (car ttbf)))
+	   (len (tbf-data (cadr ttbf)))))
+     (< i (len (tbf-data ([+] ttbf))))
+     (two-tbfp (list (tbf-fwd (car ttbf) i)
 		     (cadr ttbf)))
-     (posp (tbf-b ([+] ttbf)))
+     (<= (length (tdg-pld (nth i (tbf-data ([+] ttbf)))))
+	 (tbf-bkt ([+] ttbf)))
      (recordp (cadr ttbf)))
-  :instructions (:pro :s
-                      (:use (:instance [+]-definition-rule))
-                      :pro
-                      (:use (:instance incr-ttl-len (dgs (tbf-d (car ttbf)))
-                                       (del (tbf-ttl (cadr ttbf)))))
-                      :pro
-                      (:claim (equal (len (mget :d ([+] ttbf)))
-                                     (+ (len (mget :d (car ttbf)))
-                                        (len (mget :d (cadr ttbf))))))
-                      :prove))
+  :hints (("Goal" :use ((:instance nth-incr-ttl
+				   (tdgs (tbf-data (car ttbf)))
+				   (o (tbf-del (cadr ttbf))))
+			(:instance [+]-definition-rule))
+	   :in-theory (enable incr-ttl-definition-rule))))
 
 (definecd t1-dlv-witness (ttbf :two-tbf i :nat) :bool
-  :ic (^ (< i (len (tbf-D (car ttbf))))
-	 (posp (tbf-b (car ttbf)))
-	 (posp (tbf-b (cadr ttbf))))
-  (~= ([+] (list (tbf-dlv (car ttbf) i) (cadr ttbf)))
-      (tbf-dlv ([+] ttbf) i))
+  :ic (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (tbf-bkt (car ttbf)) (tbf-bkt (cadr ttbf))))
+  (~= ([+] (list (tbf-fwd (car ttbf) i) (cadr ttbf)))
+      (tbf-fwd ([+] ttbf) i))
   :body-contracts-hints (("Goal" :use (:instance [+]-dlv-contracts))))
 
-(property remove-ith-incr-ttl-commute (dgs :dgs i :nat del :nat-ord)
-  :proof-timeout 9000
-  :h (< i (len dgs))
-  (== (remove-ith (incr-ttl dgs del) i)
-      (incr-ttl (remove-ith dgs i) del))
+(property remove-ith-incr-ttl-commute (tdgs :tdgs i :nat del :nat-ord)
+  :h (< i (len tdgs))
+  (== (remove-ith (incr-ttl tdgs del) i)
+      (incr-ttl (remove-ith tdgs i) del))
   :hints (("Goal" :in-theory (enable remove-ith-definition-rule
 				     incr-ttl-definition-rule))))
 
-(defthm T1>T2-dlv
-  (=> (^ (two-tbfp ttbf)
-         (natp i)
-         (< i (len (tbf-d (car ttbf))))
-         (posp (tbf-b (car ttbf)))
-         (posp (tbf-b (cadr ttbf))))
-      (t1-dlv-witness ttbf i))
-  :instructions
-  ((:use (:instance remove-ith-incr-ttl-commute
-                    (dgs (tbf-d (car ttbf)))
-                    (del (tbf-ttl (cadr ttbf)))))
-   (:use (:instance incr-ttl-definition-rule
-                    (dgs (tbf-d (car ttbf)))
-                    (del (tbf-ttl (cadr ttbf)))))
-   (:use (:instance ~=-definition-rule
-                    (t1 ([+] (list (tbf-dlv (car ttbf) i)
-                                   (cadr ttbf))))
-                    (t2 (tbf-dlv ([+] ttbf) i))))
-   (:use (:instance [+]-definition-rule
-                    (ttbf (list (tbf-dlv (car ttbf) i)
-                                (cadr ttbf)))))
-   (:use (:instance [+]-definition-rule))
-   (:use (:instance t1-dlv-witness-definition-rule))
-   (:use (:instance tbf-dlv-definition-rule
-                    (tbf (car ttbf))))
-   (:use (:instance remove-prefix
-                    (ps0 (incr-ttl (tbf-d (car ttbf))
-                                   (tbf-ttl (cadr ttbf))))
-                    (ps1 (tbf-d (cadr ttbf)))))
-   :pro
-   (:in-theory (enable dgs->poss-definition-rule))
-   (:claim (equal (dgs->poss (tbf-d ([+] (list (tbf-dlv (car ttbf) i)
-                                               (cadr ttbf)))))
-                  (dgs->poss (tbf-d (tbf-dlv ([+] ttbf) i)))))
-   :prove))
+(propertyd tdgs-nth-pld-app (tdgs0 tdgs1 :tdgs i :nat del :nat-ord)
+	   :h (< i (len tdgs0))
+	   (== (tdg-pld (nth i (append (incr-ttl tdgs0 del) tdgs1)))
+	       (tdg-pld (nth i tdgs0)))
+	   :hints (("Goal" :in-theory (enable incr-ttl-definition-rule))))
+
+(property T1>T2-dlv-helper-1
+  (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (tbf-bkt (car ttbf)) (tbf-bkt (cadr ttbf))))
+  (^
+   ;; contracts
+   (< i (len (tbf-data ([+] ttbf))))
+   (<= (length (tdg-pld (nth i (tbf-data ([+] ttbf)))))
+       (tbf-bkt ([+] ttbf)))
+   ;; thm 
+   (= (tbf-b-cap ([+] (list (tbf-fwd (car ttbf) i)
+			    (cadr ttbf))))
+      (tbf-b-cap (tbf-fwd ([+] ttbf) i)))
+   (= (tbf-d-cap ([+] (list (tbf-fwd (car ttbf) i)
+			    (cadr ttbf))))
+      (tbf-d-cap (tbf-fwd ([+] ttbf) i)))
+   (= (tbf-rat ([+] (list (tbf-fwd (car ttbf) i)
+			 (cadr ttbf))))
+      (tbf-rat (tbf-fwd ([+] ttbf) i)))
+   (== (tbf-del ([+] (list (tbf-fwd (car ttbf) i)
+			   (cadr ttbf))))
+       (tbf-del (tbf-fwd ([+] ttbf) i))))
+  :hints (("Goal"
+	   :use (:instance tdgs-nth-pld-app
+			   (tdgs0 (tbf-data (car ttbf)))
+			   (tdgs1 (tbf-data (cadr ttbf)))
+			   (del (tbf-del (cadr ttbf))))
+	   :in-theory (enable tbf-fwd-definition-rule
+				     remove-ith-definition-rule
+				     [+]-definition-rule
+				     incr-ttl-definition-rule))))
+
+(property T1>T2-dlv-helper-2 (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (tbf-bkt (car ttbf)) (tbf-bkt (cadr ttbf))))
+  (^
+   ;; contracts
+   (< i (len (tbf-data ([+] ttbf))))
+   (<= (length (tdg-pld (nth i (tbf-data ([+] ttbf)))))
+       (tbf-bkt ([+] ttbf)))
+   ;; thm
+   (== (tbf-data ([+] (list (tbf-fwd (car ttbf) i)
+			    (cadr ttbf))))
+       (tbf-data (tbf-fwd ([+] ttbf) i))))
+  :hints (("Goal" :in-theory (enable tbf-fwd-definition-rule
+				     remove-ith-definition-rule
+				     [+]-definition-rule)
+	   :use ((:instance tdgs-nth-pld-app
+			    (tdgs0 (tbf-data (car ttbf)))
+			    (tdgs1 (tbf-data (cadr ttbf)))
+			    (del (tbf-del (cadr ttbf))))
+		 (:instance remove-ith-incr-ttl-commute
+			    (tdgs (tbf-data (car ttbf)))
+			    (del (tbf-del (cadr ttbf))))
+		 (:instance remove-prefix
+			    (ps0 (incr-ttl (tbf-data (car ttbf))
+					   (tbf-del (cadr ttbf))))
+			    (ps1 (tbf-data (cadr ttbf))))))))
+
+(property T1>T2-dlv (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (tbf-bkt (car ttbf)) (tbf-bkt (cadr ttbf))))
+  (t1-dlv-witness ttbf i)
+  :hints (("Goal" :use ((:instance t1-dlv-witness-definition-rule)
+			(:instance ~=-definition-rule
+                                  (t1 ([+] (list (tbf-fwd (car ttbf) i)
+                                                 (cadr ttbf))))
+                                  (t2 (tbf-fwd ([+] ttbf) i)))
+			(:instance t1>t2-dlv-helper-2)
+			(:instance t1>t2-dlv-helper-1)))))
 
 ;; If (T1 |> T2) does a delivery in T1, but nothing in T2, this is
 ;; equivalent to (T1 [+] T2) doing a delivery (to loss).
 (property (ttbf :two-tbf i :nat)
-  :h (^ (< i (len (tbf-D (car ttbf))))
-	(posp (tbf-b (car ttbf)))
-	(posp (tbf-b (cadr ttbf))))
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (tbf-bkt (car ttbf)) (tbf-bkt (cadr ttbf))))
   (t1-dlv-witness ttbf i)
   :hints (("Goal" :use (:instance T1>T2-dlv))))
 
+(propertyd tdgs-nth-pld-app-2 (tdgs0 tdgs1 :tdgs i :nat del :nat-ord)
+	   :h (< i (len tdgs1))
+	   (== (tdg-pld (nth (+ (len tdgs0) i) (append (incr-ttl tdgs0 del) tdgs1)))
+	       (tdg-pld (nth i tdgs1)))
+	   :hints (("Goal" :in-theory (enable incr-ttl-definition-rule))))
+
 (property [+]-dlv-2-body-contracts (ttbf :two-tbf i :nat)
-  :proof-timeout 9000
-  :h (^ (< i (len (tbf-D (cadr ttbf))))
-	(posp (tbf-b (cadr ttbf))))
-  (^ (< (+ (len (tbf-D (car ttbf))) i)
-	(len (tbf-D ([+] ttbf))))
+  :h (^ (< i (len (tbf-data (cadr ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+	    (tbf-bkt (cadr ttbf))))
+  (^ (< (+ (len (tbf-data (car ttbf))) i)
+	(len (tbf-data ([+] ttbf))))
      (tbfp (cadr ttbf))
-     (posp (tbf-b ([+] ttbf)))
+     (= (tbf-bkt (cadr ttbf)) (tbf-bkt ([+] ttbf)))
+     (<= (length (tdg-pld (nth (+ i (len (tbf-data (car ttbf))))
+			    (tbf-data ([+] ttbf)))))
+	 (tbf-bkt ([+] ttbf)))
      (two-tbfp (list (car ttbf)
-		     (tbf-dlv (cadr ttbf) i)))
+		     (tbf-fwd (cadr ttbf) i)))
      (recordp (cadr ttbf)))
-  :hints (("Goal" :in-theory (enable ~=-definition-rule
-				     [+]-definition-rule))))
+  :hints (("Goal" :in-theory (enable [+]-definition-rule
+				     incr-ttl-definition-rule)
+	   :use (:instance tdgs-nth-pld-app-2
+			   (tdgs0 (tbf-data (car ttbf)))
+			   (tdgs1 (tbf-data (cadr ttbf)))
+			   (del (tbf-del (cadr ttbf)))))))
 
 (definecd t2-dlv-witness (ttbf :two-tbf i :nat) :bool
-  :ic (^ (< i (len (tbf-D (cadr ttbf))))
-	 (posp (tbf-b (cadr ttbf))))
-  (~= ([+] (list (car ttbf) (tbf-dlv (cadr ttbf) i)))
-      (tbf-dlv ([+] ttbf) (+ (len (tbf-D (car ttbf))) i)))
+  :ic (^ (< i (len (tbf-data (cadr ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+	     (tbf-bkt (cadr ttbf))))
+  (~= ([+] (list (car ttbf) (tbf-fwd (cadr ttbf) i)))
+      (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i)))
   :body-contracts-hints (("Goal" :use (:instance [+]-dlv-2-body-contracts))))
+
+(propertyd t2-dlv-witness-helper-1-contracts (ttbf :two-tbf i :nat)
+	   :h (^ (< i (len (tbf-data (cadr ttbf))))
+		 (<= (length (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+		     (tbf-bkt (cadr ttbf))))
+	   (^ (< (+ (len (tbf-data (car ttbf))) i)
+		 (len (tbf-data ([+] ttbf))))
+	      (tbfp (cadr ttbf))
+	      (<= (length (tdg-pld (nth (+ (len (tbf-data (car ttbf))) i)
+					(tbf-data ([+] ttbf)))))
+		  (tbf-bkt ([+] ttbf)))
+	      (tbfp (cadr ttbf))
+	      (tlp (tbf-data (cadr ttbf)))
+	      (rationalp (tbf-bkt (cadr ttbf)))
+	      (tdgp (nth i (tbf-data (cadr ttbf))))
+	      (stringp (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+	      (acl2-numberp (tbf-b-cap (tbf-fwd ([+] ttbf)
+						(+ (len (tbf-data (car ttbf))) i))))
+	      (two-tbfp (list (car ttbf) (tbf-fwd (cadr ttbf) i)))
+	      (acl2-numberp (tbf-d-cap (tbf-fwd ([+] ttbf)
+						(+ (len (tbf-data (car ttbf))) i))))
+	      (acl2-numberp (tbf-rat (tbf-fwd ([+] ttbf)
+					      (+ (len (tbf-data (car ttbf))) i))))
+	      (tbfp (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i))))
+	   :instructions
+	   (:pro
+	    (:use (:instance [+]-definition-rule))
+	    :pro
+	    (:claim (< (+ (len (tbf-data (car ttbf))) i)
+		       (len (tbf-data ([+] ttbf)))))
+	    (:claim (tbfp (cadr ttbf)))
+	    (:claim (<= (length (tdg-pld (nth (+ (len (tbf-data (car ttbf))) i)
+					      (tbf-data ([+] ttbf)))))
+			(tbf-bkt ([+] ttbf))))
+	    (:claim (tlp (tbf-data (cadr ttbf))))
+	    (:claim (rationalp (tbf-bkt (cadr ttbf))))
+	    (:claim (tdgp (nth i (tbf-data (cadr ttbf)))))
+	    (:claim (stringp (tdg-pld (nth i (tbf-data (cadr ttbf))))))
+	    (:claim
+	     (acl2-numberp (tbf-b-cap (tbf-fwd ([+] ttbf)
+					       (+ (len (tbf-data (car ttbf))) i)))))
+	    (:claim (two-tbfp (list (car ttbf)
+				    (tbf-fwd (cadr ttbf) i))))
+	    (:claim
+	     (acl2-numberp (tbf-rat (tbf-fwd ([+] ttbf)
+					     (+ (len (tbf-data (car ttbf))) i)))))
+	    :s))
+
+
+(property t2-dlv-witness-helper-1 (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (cadr ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+	    (tbf-bkt (cadr ttbf))))
+  (^
+   ;; contracts
+   (< (+ (len (tbf-data (car ttbf))) i)
+      (len (tbf-data ([+] ttbf))))
+   (tbfp (cadr ttbf))
+   (<= (length (tdg-pld (nth (+ (len (tbf-data (car ttbf))) i)
+			     (tbf-data ([+] ttbf)))))
+       (tbf-bkt ([+] ttbf)))
+   (tbfp (cadr ttbf))
+   (tlp (tbf-data (cadr ttbf)))
+   (rationalp (tbf-bkt (cadr ttbf)))
+   (tdgp (nth i (tbf-data (cadr ttbf))))
+   (stringp (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+   (acl2-numberp (tbf-b-cap (tbf-fwd ([+] ttbf)
+				     (+ (len (tbf-data (car ttbf))) i))))
+   (two-tbfp (list (car ttbf) (tbf-fwd (cadr ttbf) i)))
+   (acl2-numberp (tbf-d-cap (tbf-fwd ([+] ttbf)
+				     (+ (len (tbf-data (car ttbf))) i))))
+   (acl2-numberp (tbf-rat (tbf-fwd ([+] ttbf)
+				   (+ (len (tbf-data (car ttbf))) i))))
+   (tbfp (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i)))
+   ;; actual theorem
+   (= (tbf-b-cap ([+] (list (car ttbf) (tbf-fwd (cadr ttbf) i))))
+      (tbf-b-cap (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i))))
+   (= (tbf-d-cap ([+] (list (car ttbf) (tbf-fwd (cadr ttbf) i))))
+      (tbf-d-cap (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i))))
+   (= (tbf-rat ([+] (list (car ttbf) (tbf-fwd (cadr ttbf) i))))
+      (tbf-rat (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i))))
+   (== (tbf-del ([+] (list (car ttbf) (tbf-fwd (cadr ttbf) i))))
+       (tbf-del (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i)))))
+  :instructions ((:use (:instance t2-dlv-witness-helper-1-contracts))
+		 (:use (:instance tbf-fwd-definition-rule
+                                  (tbf (cadr ttbf))))
+                 (:use (:instance tbf-fwd-definition-rule (tbf ([+] ttbf))
+                                  (i (+ (len (tbf-data (car ttbf))) i))))
+                 (:use (:instance [+]-definition-rule))
+                 (:use (:instance [+]-definition-rule
+                                  (ttbf (list (car ttbf)
+                                              (tbf-fwd (cadr ttbf) i)))))
+                 :prove))
+
+(property t2-dlv-witness-helper-2 (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (cadr ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+	    (tbf-bkt (cadr ttbf))))
+  (^
+   ;; contracts
+   (< (+ (len (tbf-data (car ttbf))) i)
+      (len (tbf-data ([+] ttbf))))
+   (tbfp (cadr ttbf))
+   (<= (length (tdg-pld (nth (+ (len (tbf-data (car ttbf))) i)
+			     (tbf-data ([+] ttbf)))))
+       (tbf-bkt ([+] ttbf)))
+   (tbfp (cadr ttbf))
+   (tlp (tbf-data (cadr ttbf)))
+   (rationalp (tbf-bkt (cadr ttbf)))
+   (tdgp (nth i (tbf-data (cadr ttbf))))
+   (stringp (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+   (acl2-numberp (tbf-b-cap (tbf-fwd ([+] ttbf)
+				     (+ (len (tbf-data (car ttbf))) i))))
+   (two-tbfp (list (car ttbf) (tbf-fwd (cadr ttbf) i)))
+   (acl2-numberp (tbf-d-cap (tbf-fwd ([+] ttbf)
+				     (+ (len (tbf-data (car ttbf))) i))))
+   (acl2-numberp (tbf-rat (tbf-fwd ([+] ttbf)
+				   (+ (len (tbf-data (car ttbf))) i))))
+   (tbfp (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i)))
+   ;; actual theorem
+   (== (tbf-data ([+] (list (car ttbf) (tbf-fwd (cadr ttbf) i))))
+       (tbf-data (tbf-fwd ([+] ttbf) (+ (len (tbf-data (car ttbf))) i)))))
+  :instructions ((:use (:instance t2-dlv-witness-helper-1-contracts))
+		 (:use (:instance remove-postfix
+                                  (ps0 (incr-ttl (tbf-data (car ttbf))
+                                                 (tbf-del (cadr ttbf))))
+                                  (ps1 (tbf-data (cadr ttbf)))))
+                 :pro
+                 (:use (:instance [+]-definition-rule))
+                 (:use (:instance [+]-definition-rule
+                                  (ttbf (list (car ttbf)
+                                              (tbf-fwd (cadr ttbf) i)))))
+                 (:use (:instance tbf-fwd-definition-rule (tbf ([+] ttbf))
+                                  (i (+ (len (tbf-data (car ttbf))) i))))
+                 (:use (:instance tbf-fwd-definition-rule
+                                  (tbf (cadr ttbf))))
+                 :prove))
 
 ;; If (T1 |> T2) does a delivery in T2, but nothing in T1, this is
 ;; equivalent to (T1 [+] T2) doing a delivery (which might or might not
 ;; be a loss depending on whether or not any endpoint synchronizes with
 ;; the delivery event).
 (property (ttbf :two-tbf i :nat)
-  :h (^ (< i (len (tbf-D (cadr ttbf))))
-	(posp (tbf-b (cadr ttbf))))
-  :proof-timeout 15000
+  :h (^ (< i (len (tbf-data (cadr ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (cadr ttbf)))))
+	    (tbf-bkt (cadr ttbf))))
   (t2-dlv-witness ttbf i)
-  :hints (("Goal"
-	   :use
-	   ((:instance t2-dlv-witness-definition-rule)
-	    (:instance [+]-definition-rule)
-	    (:instance [+]-definition-rule
-		       (ttbf (list (car ttbf)
-				   (tbf-dlv (cadr ttbf) i))))
-	    (:instance ~=-definition-rule
-		       (t1 ([+] (list (car ttbf)
-				      (tbf-dlv (cadr ttbf) i))))
-		       (t2 (tbf-dlv ([+] ttbf)
-				    (+ (len (tbf-D (car ttbf))) i))))
-	    (:instance tbf-dlv-definition-rule
-		       (tbf (cadr ttbf)))
-	    (:instance tbf-dlv-definition-rule (tbf ([+] ttbf))
-		       (i (+ (len (tbf-D (car ttbf))) i)))
-	    (:instance remove-postfix
-		       (ps0 (incr-ttl (tbf-D (car ttbf)) (tbf-ttl (cadr ttbf))))
-		       (ps1 (tbf-D (cadr ttbf))))))))
-
+  :hints (("Goal" :in-theory (enable t2-dlv-witness-definition-rule
+				     ~=-definition-rule)
+	   :use ((:instance t2-dlv-witness-helper-1)
+		 (:instance t2-dlv-witness-helper-2)
+		 (:instance [+]-dlv-2-body-contracts)))))
 
 ;; If (T1 |> T2) does a delivery in T1 and a matching transmission in T2,
 ;; this is equivalent to a noop.  We can prove this by defining permutations.
@@ -327,25 +580,25 @@ Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
 
 (property decrement-count-nth (ps :tl i :nat)
   :h (< i (len ps))
-  (== (count (nth i ps) ps)
+  (= (count (nth i ps) ps)
       (1+ (count (nth i ps) (remove-ith ps i))))
   :hints (("Goal" :in-theory (enable remove-ith-definition-rule))))
 
 (property decrement-count-other (ps :tl i :nat p :all)
   :h (^ (< i (len ps)) (!= (nth i ps) p))
-  (== (count p ps) (count p (remove-ith ps i)))
+  (= (count p ps) (count p (remove-ith ps i)))
   :hints (("Goal" :in-theory (enable remove-ith-definition-rule))))
 
 (property increment-count-nth (ps :tl p :all)
-  (== (1+ (count p ps)) (count p (cons p ps))))
+  (= (1+ (count p ps)) (count p (cons p ps))))
 
 (property increment-count-other (ps :tl p0 p1 :all)
   :h (!= p0 p1)
-  (== (count p1 ps) (count p1 (cons p0 ps))))
+  (= (count p1 ps) (count p1 (cons p0 ps))))
 
 (property count-app (p :all ps0 ps1 :tl)
-  (== (+ (count p ps0) (count p ps1))
-      (count p (append ps0 ps1))))
+  (= (+ (count p ps0) (count p ps1))
+     (count p (append ps0 ps1))))
 
 (in-theory (disable decrement-count-nth
 		    decrement-count-other
@@ -354,10 +607,9 @@ Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
 		    count-app))
 
 (property mv-is-a-permutation (ps0 ps1 :tl i :nat p :all)
-  :proof-timeout 8000
   :h (< i (len ps0))
   (= (count p (append (remove-ith ps0 i)
-		   (cons (nth i ps0) ps1)))
+		      (cons (nth i ps0) ps1)))
      (count p (append ps0 ps1)))
   :hints
   (("Goal":use ((:instance count-app)
@@ -369,42 +621,50 @@ Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
 		(:instance increment-count-other (ps ps1) (p0 (nth i ps0)) (p1 p)))
     :cases ((= p (nth i ps0))))))
 
-(definecd v= (dgs0 dgs1 :dgs) :bool
-  :ic (= (len dgs0) (len dgs1))
-  (match dgs0
+#|
+Future work - prove equivalence with perm library ...
+
+(include-book :dir :system "perm")
+
+(property (ps0 ps1 :poss p :pos)
+  :h (not-a-permutation p ps0 ps1)
+  (! (perm ps0 ps1)))
+|#
+(definecd v= (tdgs0 tdgs1 :tdgs) :bool
+  :ic (= (len tdgs0) (len tdgs1))
+  (match tdgs0
     (() t)
-    ((dg . rst) (^ (= (dg-val dg) (dg-val (car dgs1)))
-		   (v= rst (cdr dgs1))))))
+    ((tdg . rst) (^ (= (tdg-id tdg) (tdg-id (car tdgs1)))
+		    (v= rst (cdr tdgs1))))))
 
-(definecd swap-dgs-inner (dgs0 dgs1 :dgs i :nat) :dgs
-  :ic (< i (len dgs0))
-  (append (remove-ith dgs0 i)
-       (cons (nth i dgs0) dgs1)))
+(definecd swap-dgs-inner (tdgs0 tdgs1 :tdgs i :nat) :tdgs
+  :ic (< i (len tdgs0))
+  (append (remove-ith tdgs0 i)
+	  (cons (nth i tdgs0) tdgs1)))
 
-(property swap-dgs-inner-len (dgs0 dgs1 :dgs i :nat)
-  :h (< i (len dgs0))
-  (= (len (swap-dgs-inner dgs0 dgs1 i))
-     (+ (len dgs0) (len dgs1)))
+(property swap-dgs-inner-len (tdgs0 tdgs1 :tdgs i :nat)
+  :h (< i (len tdgs0))
+  (= (len (swap-dgs-inner tdgs0 tdgs1 i))
+     (+ (len tdgs0) (len tdgs1)))
   :hints (("Goal" :in-theory (enable swap-dgs-inner-definition-rule))))
 
-(definecd swap-dgs (ttbf :two-tbf i :nat) :dgs
-  :ic (< i (len (tbf-D (car ttbf))))
-  (swap-dgs-inner (tbf-D (car ttbf))
-		  (tbf-D (cadr ttbf))
+(definecd swap-dgs (ttbf :two-tbf i :nat) :tdgs
+  :ic (< i (len (tbf-data (car ttbf))))
+  (swap-dgs-inner (tbf-data (car ttbf))
+		  (tbf-data (cadr ttbf))
 		  i))
 
 (property swap-dgs-len (ttbf :two-tbf i :nat)
-  :h (< i (len (tbf-D (car ttbf))))
-  (= (len (swap-dgs ttbf i)) (len (tbf-D ([+] ttbf))))
+  :h (< i (len (tbf-data (car ttbf))))
+  (= (len (swap-dgs ttbf i)) (len (tbf-data ([+] ttbf))))
   :hints (("Goal" :in-theory (enable [+]-definition-rule
 				     swap-dgs-definition-rule))))
 
 (property ~=/mvd-i-v-contracts (ttbf0 ttbf1 :two-tbf i :nat)
-  :proof-timeout 8000
-  :h (^ (< i (len (tbf-D (car ttbf0))))
-	(= (len (tbf-D ([+] ttbf1)))
-	   (len (tbf-D ([+] ttbf0)))))
-  (= (len (tbf-D ([+] ttbf1)))
+  :h (^ (< i (len (tbf-data (car ttbf0))))
+	(= (len (tbf-data ([+] ttbf1)))
+	   (len (tbf-data ([+] ttbf0)))))
+  (= (len (tbf-data ([+] ttbf1)))
      (len (swap-dgs ttbf0 i)))
   :hints (("Goal" :in-theory (enable [+]-definition-rule))))
 
@@ -413,84 +673,96 @@ Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
 ;; to the other.  We can do this explicitly, since we just proved that
 ;; this operation does, indeed, constitute a permutation.
 (definecd ~=/mvd-i (ttbf0 ttbf1 :two-tbf i :nat) :bool
-  :ic (^ (< i (len (tbf-D (car ttbf0))))
-	 (= (len (tbf-D ([+] ttbf1)))
-	    (len (tbf-D ([+] ttbf0)))))
-  (^ (= (tbf-l-cap ([+] ttbf0)) (tbf-l-cap ([+] ttbf1)))
+  :ic (^ (< i (len (tbf-data (car ttbf0))))
+	 (= (len (tbf-data ([+] ttbf1)))
+	    (len (tbf-data ([+] ttbf0)))))
+  (^ (= (tbf-d-cap ([+] ttbf0)) (tbf-d-cap ([+] ttbf1)))
      (= (tbf-b-cap ([+] ttbf0)) (tbf-b-cap ([+] ttbf1)))
-     (= (tbf-r ([+] ttbf0)) (tbf-r ([+] ttbf1)))
-     (equal (tbf-ttl ([+] ttbf0)) (tbf-ttl ([+] ttbf1)))
-     (v= (tbf-D ([+] ttbf1))
+     (= (tbf-rat ([+] ttbf0)) (tbf-rat ([+] ttbf1)))
+     (== (tbf-del ([+] ttbf0)) (tbf-del ([+] ttbf1)))
+     (v= (tbf-data ([+] ttbf1))
 	 (swap-dgs ttbf0 i)))
-  :body-contracts-hints (("Goal" :use (:instance  ~=/mvd-i-v-contracts))))
+  :body-contracts-hints (("Goal" :use (:instance ~=/mvd-i-v-contracts))))
 
 (property nth-dg-is-record (ttbf :two-tbf i :nat)
-  :h (< i (len (tbf-D (car ttbf))))
-  (recordp (nth i (tbf-D (car ttbf))))
-  :instructions (:pro (:claim (dgsp (tbf-D (car ttbf))))
-                      (:claim (dgp (nth i (tbf-D (car ttbf)))))
-                      :prove))
+  :h (< i (len (tbf-data (car ttbf))))
+  (recordp (nth i (tbf-data (car ttbf))))
+  :instructions (:pro (:claim (tdgsp (tbf-data (car ttbf)))) :prove))
 
 (property nth-val-is-pos (ttbf :two-tbf i :nat)
-  :h (< i (len (mget :D (car ttbf))))
-  (posp (dg-val (nth i (tbf-D (car ttbf)))))
-  :instructions (:pro (:claim (dgsp (tbf-D (car ttbf))))
-                      (:claim (dgp (nth i (tbf-D (car ttbf)))))
-                      :prove))
+  :h (< i (len (mget :data (car ttbf))))
+  (posp (tdg-id (nth i (tbf-data (car ttbf)))))
+  :instructions (:pro (:claim (tdgsp (tbf-data (car ttbf)))) :prove))
 
 (property contracts-lem (ttbf :two-tbf i :nat)
-  :proof-timeout 8000
-  :h (^ (posp (tbf-b (car ttbf)))
-	(< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	(< i (len (tbf-D (car ttbf)))))
-  (= (len (tbf-D ([+] (list (tbf-dlv (car ttbf) i)
-			    (tbf-trn (cadr ttbf)
-				     (dg-val (nth i (tbf-D (car ttbf))))
-				     nil)))))
-     (len (tbf-D ([+] ttbf))))
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	    (tbf-d-cap (cadr ttbf))))
+  (= (len (tbf-data ([+] (list (tbf-fwd (car ttbf) i)
+			       (tbf-prc (cadr ttbf)
+					(tdg-id (nth i (tbf-data (car ttbf))))
+					(tdg-pld (nth i (tbf-data (car ttbf)))))))))
+     (len (tbf-data ([+] ttbf))))
   :hints (("Goal" :in-theory (enable [+]-definition-rule
-				     tbf-dlv-definition-rule
-				     tbf-trn-definition-rule))))
+				     sz-definition-rule
+				     tbf-fwd-definition-rule
+				     tbf-prc-definition-rule))))
 
 (definecd mv-tbf-0 (ttbf :two-tbf i :nat) :tbf
-  :ic (^ (posp (tbf-b (car ttbf)))
-	 (< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	 (< i (len (tbf-D (car ttbf)))))
-  (tbf-dlv (car ttbf) i))
+  :ic (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf))))
+  (tbf-fwd (car ttbf) i)
+  :body-contracts-hints (("Goal" :in-theory (enable tbf-fwd-definition-rule
+						    sz-definition-rule)
+			  :use (:instance remove-ith-decreases-sz
+					  (tdgs (tbf-data (car ttbf)))))))
+
+(propertyd mv-tbf-1-body-contracts (ttbf :two-tbf i :nat)
+  :h (< i (len (tbf-data (car ttbf))))
+  (^ (tbfp (cadr ttbf))
+     (tdgp (nth i (tbf-data (car ttbf))))
+     (posp (tdg-id (nth i (tbf-data (car ttbf)))))
+     (stringp (tdg-pld (nth i (tbf-data (car ttbf)))))))
 
 (definecd mv-tbf-1 (ttbf :two-tbf i :nat) :tbf
-  :ic (^ (posp (tbf-b (car ttbf)))
-	 (< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	 (< i (len (tbf-D (car ttbf)))))
-  (tbf-trn (cadr ttbf)
-	   (dg-val (nth i (tbf-D (car ttbf))))
-	   nil))
+  :ic (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	     (tbf-d-cap (cadr ttbf))))
+  (tbf-prc (cadr ttbf)
+	   (tdg-id (nth i (tbf-data (car ttbf))))
+	   (tdg-pld (nth i (tbf-data (car ttbf)))))
+  :body-contracts-hints (("Goal" :use (:instance mv-tbf-1-body-contracts))))
 
 (definecd mv-ttbf (ttbf :two-tbf i :nat) :two-tbf
-  :ic (^ (posp (tbf-b (car ttbf)))
-	 (< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	 (< i (len (tbf-D (car ttbf)))))
+  :ic (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	     (tbf-d-cap (cadr ttbf))))
   (list (mv-tbf-0 ttbf i)
 	(mv-tbf-1 ttbf i)))
 
-(property contracts-lem-2a (ttbf :two-tbf i :nat)
-  :h (^ (posp (tbf-b (car ttbf)))
-	(< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	(< i (len (tbf-D (car ttbf)))))
-  (< i (len (tbf-D (car ttbf))))
-  :hints (("Goal" :use ((:instance contracts-lem)
-			(:instance [+]-definition-rule)
-			(:instance [+]-definition-rule (ttbf (mv-ttbf ttbf i)))
-			(:instance mv-ttbf-definition-rule)
-			(:instance mv-tbf-0-definition-rule)
-			(:instance mv-tbf-1-definition-rule)))))
+(propertyd contracts-lem-2a (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	     (tbf-d-cap (cadr ttbf))))
+  (< i (len (tbf-data (car ttbf)))))
 
-(property contracts-lem-2b (ttbf :two-tbf i :nat)
-  :h (^ (posp (tbf-b (car ttbf)))
-	(< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	(< i (len (tbf-D (car ttbf)))))
-  (= (len (tbf-D ([+] (mv-ttbf ttbf i))))
-     (len (tbf-D ([+] ttbf))))
+(propertyd contracts-lem-2b (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	     (tbf-d-cap (cadr ttbf))))
+  (= (len (tbf-data ([+] (mv-ttbf ttbf i))))
+     (len (tbf-data ([+] ttbf))))
   :hints (("Goal" :use ((:instance contracts-lem)
 			(:instance [+]-definition-rule)
 			(:instance [+]-definition-rule (ttbf (mv-ttbf ttbf i)))
@@ -499,117 +771,94 @@ Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
 			(:instance mv-tbf-1-definition-rule)))))
 
 (definecd mv-lem-witness (ttbf :two-tbf i :nat) :bool
-  :ic (^ (posp (tbf-b (car ttbf)))
-	 (< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	 (< i (len (tbf-D (car ttbf)))))
+  :timeout 40000
+  :ic (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	     (tbf-d-cap (cadr ttbf))))
   (~=/mvd-i ttbf (mv-ttbf ttbf i) i)
   :body-contracts-hints (("Goal" :use ((:instance contracts-lem-2a)
 				       (:instance contracts-lem-2b)))))
 
-(property v=-dgs-reduction (dgs0 dgs1 :dgs dg :dg ttl :nat-ord)
-  (v= (append (incr-ttl dgs0 ttl) (cons (dg (mget :val dg) ttl) dgs1))
+(property v=-dgs-reduction (dgs0 dgs1 :tdgs dg :tdg ttl :nat-ord)
+  (v= (append (incr-ttl dgs0 ttl) (cons (tdg (tdg-id dg) ttl (tdg-pld dg)) dgs1))
       (append dgs0 (cons dg dgs1)))
   :hints (("Goal" :in-theory (enable v=-definition-rule
 				     incr-ttl-definition-rule))))
 
 (property mv-lem-1 (ttbf :two-tbf i :nat)
-  :proof-timeout 100000 
-  :h (^ (posp (tbf-b (car ttbf)))
-	(< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	(< i (len (tbf-D (car ttbf)))))
-  (^ (= (tbf-l-cap ([+] ttbf))
-	(tbf-l-cap ([+] (mv-ttbf ttbf i))))
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	    (tbf-d-cap (cadr ttbf))))
+  (^ (= (tbf-d-cap ([+] ttbf))
+	(tbf-d-cap ([+] (mv-ttbf ttbf i))))
      (= (tbf-b-cap ([+] ttbf))
 	(tbf-b-cap ([+] (mv-ttbf ttbf i))))
-     (= (tbf-r ([+] ttbf))
-	(tbf-r ([+] (mv-ttbf ttbf i)))))
-  :hints (("Goal" :use ((:instance contracts-lem-2a)
-			(:instance contracts-lem-2b)
-			(:instance mv-lem-witness-definition-rule)
-			(:instance ~=/mvd-i-definition-rule (ttbf0 ttbf)
-				   (ttbf1 (mv-ttbf ttbf i)))
-			(:instance [+]-definition-rule)
-			(:instance [+]-definition-rule
-				   (ttbf (mv-ttbf ttbf i)))
-			(:instance mv-ttbf-definition-rule)
-			(:instance mv-tbf-0-definition-rule)
-			(:instance mv-tbf-1-definition-rule)
-			(:instance tbf-dlv-definition-rule
-				   (tbf (car ttbf)))
-			(:instance tbf-trn-definition-rule
-				   (tbf (cadr ttbf))
-				   (x (dg-val (nth i (tbf-D (car ttbf)))))
-				   (drop nil))))))
+     (= (tbf-rat ([+] ttbf))
+	(tbf-rat ([+] (mv-ttbf ttbf i)))))
+  :hints (("Goal" :in-theory (enable [+]-definition-rule
+				     mv-ttbf-definition-rule
+				     mv-tbf-0-definition-rule
+				     mv-tbf-1-definition-rule
+				     tbf-prc-definition-rule
+				     remove-ith-definition-rule
+				     tbf-fwd-definition-rule))))
 
 (property mv-lem-2 (ttbf :two-tbf i :nat)
   :proof-timeout 100000 
-  :h (^ (posp (tbf-b (car ttbf)))
-	(< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	(< i (len (tbf-D (car ttbf)))))
-  (equal (tbf-ttl ([+] ttbf))
-	 (tbf-ttl ([+] (mv-ttbf ttbf i))))
-  :hints (("Goal" :use ((:instance contracts-lem-2a)
-			(:instance contracts-lem-2b)
-			(:instance mv-lem-witness-definition-rule)
-			(:instance ~=/mvd-i-definition-rule (ttbf0 ttbf)
-				   (ttbf1 (mv-ttbf ttbf i)))
-			(:instance [+]-definition-rule)
-			(:instance [+]-definition-rule
-				   (ttbf (mv-ttbf ttbf i)))
-			(:instance mv-ttbf-definition-rule)
-			(:instance mv-tbf-0-definition-rule)
-			(:instance mv-tbf-1-definition-rule)
-			(:instance tbf-dlv-definition-rule
-				   (tbf (car ttbf)))
-			(:instance tbf-trn-definition-rule
-				   (tbf (cadr ttbf))
-				   (x (dg-val (nth i (tbf-D (car ttbf)))))
-				   (drop nil)))
-	   :in-theory (enable ord+-definition-rule))))
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	    (tbf-d-cap (cadr ttbf))))
+  (== (tbf-del ([+] ttbf))
+      (tbf-del ([+] (mv-ttbf ttbf i))))
+  :hints (("Goal" :in-theory (enable [+]-definition-rule
+				     mv-ttbf-definition-rule
+				     mv-tbf-0-definition-rule
+				     mv-tbf-1-definition-rule
+				     tbf-prc-definition-rule
+				     remove-ith-definition-rule
+				     tbf-fwd-definition-rule))))
 
 (definecd mv-lem-3-helper (ttbf :two-tbf i :nat) :bool
-  :ic (^ (posp (tbf-b (car ttbf)))
-	 (< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	 (< i (len (tbf-D (car ttbf)))))
-  (v= (tbf-d ([+] (mv-ttbf ttbf i)))
+  :ic (^ (< i (len (tbf-data (car ttbf))))
+	 (<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	     (tbf-bkt (car ttbf)))
+	 (<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	     (tbf-d-cap (cadr ttbf))))
+  (v= (tbf-data ([+] (mv-ttbf ttbf i)))
       (swap-dgs ttbf i))
   :body-contracts-hints (("Goal" :use (:instance contracts-lem-2b))))
 
-;; This one is CRAZY slow.  Could be attacked later in a strategic fashion.
 (property mv-lem-3 (ttbf :two-tbf i :nat)
-  :proof-timeout 100000 
-  :h (^ (posp (tbf-b (car ttbf)))
-	(< (len (tbf-D (cadr ttbf))) (tbf-l-cap (cadr ttbf)))
-	(< i (len (tbf-D (car ttbf)))))
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	    (tbf-d-cap (cadr ttbf))))
   (mv-lem-3-helper ttbf i)
-  :hints (("Goal" :use ((:instance mv-lem-3-helper-definition-rule)
-			(:instance contracts-lem-2a)
-			(:instance contracts-lem-2b)
-			(:instance mv-lem-witness-definition-rule)
-			(:instance ~=/mvd-i-definition-rule (ttbf0 ttbf)
-				   (ttbf1 (mv-ttbf ttbf i)))
-			(:instance [+]-definition-rule)
-			(:instance [+]-definition-rule
-				   (ttbf (mv-ttbf ttbf i)))
-			(:instance mv-ttbf-definition-rule)
-			(:instance mv-tbf-0-definition-rule)
-			(:instance mv-tbf-1-definition-rule)
-			(:instance tbf-dlv-definition-rule
-				   (tbf (car ttbf)))
-			(:instance tbf-trn-definition-rule
-				   (tbf (cadr ttbf))
-				   (x (dg-val (nth i (tbf-D (car ttbf)))))
-				   (drop nil))
-			(:instance swap-dgs-definition-rule)
-			(:instance swap-dgs-inner-definition-rule
-				   (dgs0 (tbf-D (car ttbf)))
-				   (dgs1 (tbf-D (cadr ttbf))))
-			(:instance v=-dgs-reduction
-				   (dgs0 (remove-ith (tbf-D (car ttbf)) i))
-				   (dgs1 (tbf-D (cadr ttbf)))
-				   (ttl (tbf-ttl (cadr (mv-ttbf ttbf i))))
-				   (dg (nth i (tbf-D (car ttbf))))))
-	   :in-theory (enable ord+-definition-rule))))
+  :hints (("Goal" :in-theory (enable mv-lem-3-helper-definition-rule
+				     mv-lem-witness-definition-rule
+				     ~=/mvd-i-definition-rule
+				     [+]-definition-rule
+				     mv-ttbf-definition-rule
+				     mv-tbf-0-definition-rule
+				     mv-tbf-1-definition-rule
+				     tbf-fwd-definition-rule
+				     tbf-prc-definition-rule
+				     swap-dgs-definition-rule
+				     swap-dgs-inner-definition-rule)
+	   :use ((:instance contracts-lem-2a)
+		 (:instance contracts-lem-2b)
+		 (:instance v=-dgs-reduction
+			    (dgs0 (remove-ith (tbf-data (car ttbf)) i))
+			    (dgs1 (tbf-data (cadr ttbf)))
+			    (ttl (tbf-del (cadr (mv-ttbf ttbf i))))
+			    (dg (nth i (tbf-data (car ttbf)))))))))
 
 ;; There is one important difference, which we highlight right here.
 ;; Namely, stuff in the second queue cannot go "back" to the first one.
@@ -626,172 +875,135 @@ Assume that (len (tbf-D (car ttbf))) < (tbf-l-cap (car ttbf)), and
 ;; reordered by swaps of the form (i, j) where i < j (WLOG), i < len(t1),
 ;; and j >= len(t1).  In other words, t1 [+] t2 has _strictly more_ behaviors
 ;; than t1 |> t2.
-(defthm mv-theorem
-  (=> (^ (two-tbfp ttbf)
-         (natp i)
-         (posp (tbf-b (car ttbf)))
-         (< (len (tbf-d (cadr ttbf)))
-            (tbf-l-cap (cadr ttbf)))
-         (< i (len (tbf-d (car ttbf)))))
-      (mv-lem-witness ttbf i))
+(property mv-theorem (ttbf :two-tbf i :nat)
+  :h (^ (< i (len (tbf-data (car ttbf))))
+	(<= (length (tdg-pld (nth i (tbf-data (car ttbf)))))
+	    (tbf-bkt (car ttbf)))
+	(<= (+ (sz (tbf-data (cadr ttbf))) (length (tdg-pld (nth i (tbf-data (car ttbf))))))
+	    (tbf-d-cap (cadr ttbf))))
+  (mv-lem-witness ttbf i)
   :instructions ((:use (:instance mv-lem-witness-definition-rule))
+                 :pro
                  (:use (:instance mv-lem-3-helper-definition-rule))
                  (:use (:instance mv-lem-3))
                  (:use (:instance mv-lem-2))
                  (:use (:instance mv-lem-1))
-                 :pro
                  (:use (:instance ~=/mvd-i-definition-rule (ttbf0 ttbf)
                                   (ttbf1 (mv-ttbf ttbf i))))
+                 :pro (:use (:instance contracts-lem-2b))
                  :pro
-                 (:claim (and (= (tbf-l-cap ([+] ttbf))
-                                 (tbf-l-cap ([+] (mv-ttbf ttbf i))))
+                 (:claim (= (len (tbf-data ([+] (mv-ttbf ttbf i))))
+                            (len (tbf-data ([+] ttbf)))))
+                 (:drop 1)
+                 (:claim (and (= (tbf-d-cap ([+] ttbf))
+                                 (tbf-d-cap ([+] (mv-ttbf ttbf i))))
                               (= (tbf-b-cap ([+] ttbf))
                                  (tbf-b-cap ([+] (mv-ttbf ttbf i))))
-                              (= (tbf-r ([+] ttbf))
-                                 (tbf-r ([+] (mv-ttbf ttbf i))))
-                              (equal (tbf-ttl ([+] ttbf))
-                                     (tbf-ttl ([+] (mv-ttbf ttbf i))))
-                              (v= (tbf-d ([+] (mv-ttbf ttbf i)))
-                                  (swap-dgs ttbf i))))
-                 (:use (:instance contracts-lem-2b))
+                              (= (tbf-rat ([+] ttbf))
+                                 (tbf-rat ([+] (mv-ttbf ttbf i))))))
+                 (:drop 2)
+                 (:claim (equal (tbf-del ([+] ttbf))
+                                (tbf-del ([+] (mv-ttbf ttbf i)))))
+                 (:drop 2)
+                 (:claim (v= (tbf-data ([+] (mv-ttbf ttbf i)))
+                             (swap-dgs ttbf i)))
+                 (:drop 2 3)
+                 (:claim (and (two-tbfp ttbf)
+                              (two-tbfp (mv-ttbf ttbf i))
+                              (natp i)
+                              (< i (len (tbf-data (car ttbf))))
+                              (= (len (tbf-data ([+] (mv-ttbf ttbf i))))
+                                 (len (tbf-data ([+] ttbf))))))
+                 (:claim (equal (~=/mvd-i ttbf (mv-ttbf ttbf i) i)
+                                (and (= (tbf-d-cap ([+] ttbf))
+                                        (tbf-d-cap ([+] (mv-ttbf ttbf i))))
+                                     (= (tbf-b-cap ([+] ttbf))
+                                        (tbf-b-cap ([+] (mv-ttbf ttbf i))))
+                                     (= (tbf-rat ([+] ttbf))
+                                        (tbf-rat ([+] (mv-ttbf ttbf i))))
+                                     (equal (tbf-del ([+] ttbf))
+                                            (tbf-del ([+] (mv-ttbf ttbf i))))
+                                     (v= (tbf-data ([+] (mv-ttbf ttbf i)))
+                                         (swap-dgs ttbf i)))))
+                 (:drop 1)
                  :prove))
 
-(definecd all-nz (dgs :dgs) :bool
+;; Here is where we begin reasoning about scenarios where we can guarantee
+;; a datagram will not expire while in-transit.
+(definecd all-nz (dgs :tdgs) :bool
   (match dgs
     (() t)
-    ((dg . rst) (^ (!= 0 (dg-ttl dg)) (all-nz rst)))))
+    ((dg . rst) (^ (!= 0 (tdg-del dg)) (all-nz rst)))))
 
-(property all-nz->age-all-len=len (dgs :dgs)
+(property all-nz->age-all-len=len (dgs :tdgs)
   :h (all-nz dgs)
   (= (len (age-all dgs)) (len dgs))
   :hints (("Goal" :in-theory (enable all-nz-definition-rule
 				     age-all-definition-rule))))
 
-(property all-nz->age-all->dgs->poss= (dgs :dgs)
+(property all-nz->age-all->dgs->poss= (dgs :tdgs)
   :h (all-nz dgs)
-  (equal (dgs->poss (age-all dgs)) (dgs->poss dgs))
-  :hints (("Goal" :in-theory (enable dgs->poss-definition-rule
+  (== (tdgs->poss (age-all dgs)) (tdgs->poss dgs))
+  :hints (("Goal" :in-theory (enable tdgs->poss-definition-rule
+				     |MAP*-*(LAMBDA (D) (TDG-ID D))|
 				     age-all-definition-rule
 				     all-nz-definition-rule))))
 
 (property all-nz->tbf-tick->dgs->poss= (tbf :tbf)
-  :h (all-nz (tbf-D tbf))
-  (equal (dgs->poss (tbf-D (tbf-tick tbf))) (dgs->poss (tbf-D tbf)))
+  :h (all-nz (tbf-data tbf))
+  (== (tdgs->poss (tbf-data (tbf-tick tbf))) (tdgs->poss (tbf-data tbf)))
   :hints (("Goal" :in-theory (enable tbf-tick-definition-rule
 				     tbf-age-definition-rule))))
 
 (property data-helper-for-tick-1 (ttbf :two-tbf)
-  :h (^ (all-nz (tbf-D (car ttbf)))
-	(all-nz (tbf-D (cadr ttbf))))
-  (equal (dgs->poss (tbf-D ([+] ttbf)))
-	 (dgs->poss (tbf-D ([+] (list (tbf-tick (car ttbf)) (cadr ttbf))))))
-  :hints (("Goal" :use ((:instance dgs->poss-app
-				   (dgs0 (incr-ttl (tbf-d (car (list (tbf-tick (car ttbf))
-								     (cadr ttbf))))
-						   (tbf-ttl (cadr (list (tbf-tick (car ttbf))
-									(cadr ttbf))))))
-				   (dgs1 (tbf-d (cadr (list (tbf-tick (car ttbf))
-							    (cadr ttbf))))))
-			(:instance dgs->poss-app
-				   (dgs0 (incr-ttl (tbf-d (car ttbf))
-						   (tbf-ttl (cadr ttbf))))
-				   (dgs1 (tbf-d (cadr ttbf))))
-			(:instance dgs->poss-app (dgs0 (tbf-d (car ttbf)))
-				   (dgs1 (tbf-d (cadr ttbf))))
-			(:instance dgs->poss-ignore-incr
-				   (dgs (tbf-d (car ttbf)))
-				   (del (tbf-ttl (cadr ttbf))))
-			(:instance dgs->poss-ignore-incr
-				   (dgs (tbf-d (car (list (tbf-tick (car ttbf))
-							  (cadr ttbf)))))
-				   (del (tbf-ttl (cadr (list (tbf-tick (car ttbf))
-							     (cadr ttbf))))))
-			(:instance all-nz->tbf-tick->dgs->poss=
-				   (tbf (car ttbf)))
-			(:instance [+]-definition-rule
-				   (ttbf (list (tbf-tick (car ttbf))
-					       (cadr ttbf))))
-			(:instance [+]-definition-rule)))))
+  :h (^ (all-nz (tbf-data (car ttbf)))
+	(all-nz (tbf-data (cadr ttbf))))
+  (== (tdgs->poss (tbf-data ([+] ttbf)))
+      (tdgs->poss (tbf-data ([+] (list (tbf-tick (car ttbf)) (cadr ttbf))))))
+  :hints (("Goal":in-theory (enable [+]-definition-rule)
+	   :use ((:instance tdgs->poss-app
+			    (tdgs0 (incr-ttl (tbf-data (car (list (tbf-tick (car ttbf))
+								 (cadr ttbf))))
+					    (tbf-del (cadr (list (tbf-tick (car ttbf))
+								 (cadr ttbf))))))
+			    (tdgs1 (tbf-data (cadr (list (tbf-tick (car ttbf))
+							(cadr ttbf))))))
+		 (:instance all-nz->tbf-tick->dgs->poss=
+			    (tbf (car ttbf)))))))
 
 ;; If (T1 |> T2) does a tick in T1, this is equivalent to a noop, provided nothing disappears.
-(defthm tick-t1-thm
-  (=> (^ (two-tbfp ttbf)
-         (all-nz (tbf-d (car ttbf)))
-         (all-nz (tbf-d (cadr ttbf))))
-      (~= ([+] ttbf)
-          ([+] (list (tbf-tick (car ttbf))
-                     (cadr ttbf)))))
-  :instructions ((:use (:instance ~=-definition-rule (t1 ([+] ttbf))
-                                  (t2 ([+] (list (tbf-tick (car ttbf))
-                                                 (cadr ttbf))))))
-                 (:use (:instance [+]-definition-rule))
-                 (:use (:instance [+]-definition-rule
-                                  (ttbf (list (tbf-tick (car ttbf))
-                                              (cadr ttbf)))))
-                 (:use (:instance tbf-tick-definition-rule
-                                  (tbf (car ttbf))))
-                 (:use (:instance tbf-age-definition-rule
-                                  (tbf (mset :b
-                                             (min (+ (tbf-b (car ttbf))
-                                                     (tbf-r (car ttbf)))
-                                                  (tbf-b-cap (car ttbf)))
-                                             (car ttbf)))))
-                 :prove))
+(property tick-t1 (ttbf :two-tbf)
+  :h (^ (all-nz (tbf-data (car ttbf)))
+	(all-nz (tbf-data (cadr ttbf))))
+  (~= ([+] ttbf) ([+] (list (tbf-tick (car ttbf)) (cadr ttbf))))
+  :hints (("Goal" :in-theory (enable |MAP*-*(LAMBDA (D) (TDG-ID D))|
+				     ~=-definition-rule
+				     [+]-definition-rule
+				     tbf-tick-definition-rule
+				     tbf-age-definition-rule))))
 
 (property data-helper-for-tick-2 (ttbf :two-tbf)
-  :h (^ (all-nz (tbf-D (car ttbf)))
-	(all-nz (tbf-D (cadr ttbf))))
-  (equal (dgs->poss (tbf-D ([+] ttbf)))
-	 (dgs->poss (tbf-D ([+] (list (car ttbf) (tbf-tick (cadr ttbf)))))))
-  :hints (("Goal" :use ((:instance dgs->poss-app
-				   (dgs0 (incr-ttl (tbf-d (car (list (car ttbf)
-								     (tbf-tick (cadr ttbf)))))
-						   (tbf-ttl (cadr (list (car ttbf)
-								(tbf-tick (cadr ttbf)))))))
-				   (dgs1 (tbf-d (cadr (list (car ttbf)
-							    (tbf-tick (cadr ttbf)))))))
-			(:instance dgs->poss-app
-				   (dgs0 (incr-ttl (tbf-d (car ttbf))
-						   (tbf-ttl (cadr ttbf))))
-				   (dgs1 (tbf-d (cadr ttbf))))
-			(:instance dgs->poss-app (dgs0 (tbf-d (car ttbf)))
-				   (dgs1 (tbf-d (cadr ttbf))))
-			(:instance dgs->poss-ignore-incr
-				   (dgs (tbf-d (car ttbf)))
-				   (del (tbf-ttl (cadr ttbf))))
-			(:instance dgs->poss-ignore-incr
-				   (dgs (tbf-d (car (list (car ttbf)
-							  (tbf-tick (cadr ttbf))))))
-				   (del (tbf-ttl (cadr (list (car ttbf)
-							     (tbf-tick (cadr ttbf)))))))
-			(:instance all-nz->tbf-tick->dgs->poss=
-				   (tbf (cadr ttbf)))
-			(:instance [+]-definition-rule
-				   (ttbf (list (car ttbf)
-					       (tbf-tick (cadr ttbf)))))
-			(:instance [+]-definition-rule)))))
+  :h (^ (all-nz (tbf-data (car ttbf)))
+	(all-nz (tbf-data (cadr ttbf))))
+  (== (tdgs->poss (tbf-data ([+] ttbf)))
+      (tdgs->poss (tbf-data ([+] (list (car ttbf) (tbf-tick (cadr ttbf)))))))
+  :hints (("Goal" :in-theory (enable [+]-definition-rule)
+	   :use ((:instance tdgs->poss-app
+			    (tdgs0 (incr-ttl (tbf-data (car (list (car ttbf)
+								  (tbf-tick (cadr ttbf)))))
+					     (tbf-del (cadr (list (car ttbf)
+								  (tbf-tick (cadr ttbf)))))))
+			    (tdgs1 (tbf-data (cadr (list (car ttbf)
+							 (tbf-tick (cadr ttbf)))))))
+		 (:instance all-nz->tbf-tick->dgs->poss=
+			    (tbf (cadr ttbf)))))))
 
 ;; If (T1 |> T2) does a tick in T2, this is equivalent to a noop, provided nothing disappears.
-(defthm tick-t2-thm
-  (=> (^ (two-tbfp ttbf)
-         (all-nz (tbf-d (car ttbf)))
-         (all-nz (tbf-d (cadr ttbf))))
-      (~= ([+] ttbf)
-          ([+] (list (car ttbf)
-                     (tbf-tick (cadr ttbf))))))
-  :instructions ((:use (:instance ~=-definition-rule (t1 ([+] ttbf))
-                                  (t2 ([+] (list (car ttbf)
-                                                 (tbf-tick (cadr ttbf)))))))
-                 (:use (:instance [+]-definition-rule))
-                 (:use (:instance [+]-definition-rule
-                                  (ttbf (list (car ttbf)
-                                              (tbf-tick (cadr ttbf))))))
-                 (:use (:instance tbf-tick-definition-rule
-                                  (tbf (cadr ttbf))))
-                 (:use (:instance tbf-age-definition-rule
-                                  (tbf (mset :b
-                                             (min (+ (tbf-b (cadr ttbf))
-                                                     (tbf-r (cadr ttbf)))
-                                                  (tbf-b-cap (cadr ttbf)))
-                                             (cadr ttbf)))))
-                 :prove))
+(property tick-t2 (ttbf :two-tbf)
+  :h (^ (all-nz (tbf-data (car ttbf)))
+	(all-nz (tbf-data (cadr ttbf))))
+  (~= ([+] ttbf) ([+] (list (car ttbf) (tbf-tick (cadr ttbf)))))
+  :hints (("Goal" :in-theory (enable ~=-definition-rule
+				     [+]-definition-rule
+				     tbf-tick-definition-rule
+				     tbf-age-definition-rule))))
